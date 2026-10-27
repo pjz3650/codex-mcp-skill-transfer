@@ -25,30 +25,30 @@ function Read-Mcps {
     if (-not (Test-Path $config)) { return ,$entries }
     $section = $null
     $command = $null
-    $args = @()
+    $mcpArgs = @()
     function Emit-Mcp {
-        if ($section -and $command -and (Test-SafeArg $command) -and @($args | Where-Object { -not (Test-SafeArg $_) }).Count -eq 0) {
-            return @{name=$section; command=$command; args=@($args)}
+        if ($section -and $command -and (Test-SafeArg $command) -and @($mcpArgs | Where-Object { -not (Test-SafeArg $_) }).Count -eq 0) {
+            return @{name=$section; command=$command; args=@($mcpArgs)}
         }
         return $null
     }
     foreach ($line in (Get-Content -LiteralPath $config -Encoding UTF8)) {
         if ($line -match '^\s*\[mcp_servers\.([A-Za-z0-9_-]+)\]\s*(?:#.*)?$') {
             $item = Emit-Mcp; if ($item) { $entries += $item }
-            $section=$Matches[1]; $command=$null; $args=@(); continue
+            $section=$Matches[1]; $command=$null; $mcpArgs=@(); continue
         }
         if ($line -match '^\s*\[') {
             $item = Emit-Mcp; if ($item) { $entries += $item }
-            $section=$null; $command=$null; $args=@(); continue
+            $section=$null; $command=$null; $mcpArgs=@(); continue
         }
         if (-not $section) { continue }
         if ($line -match '^\s*command\s*=\s*"([^"]+)"\s*(?:#.*)?$') { $command=$Matches[1]; continue }
         if ($line -match '^\s*args\s*=\s*\[(.*)\]\s*(?:#.*)?$') {
-            $raw=$Matches[1]; $args=@()
+            $raw=$Matches[1]; $mcpArgs=@()
             if ($raw.Trim()) {
                 $stripped=[regex]::Replace($raw, '"[^"]*"', '')
                 if ($stripped -replace '[\s,]','') { $command=$null; continue }
-                foreach ($m in [regex]::Matches($raw,'"([^"]*)"')) { $args += $m.Groups[1].Value }
+                foreach ($m in [regex]::Matches($raw,'"([^"]*)"')) { $mcpArgs += $m.Groups[1].Value }
             }
         }
     }
@@ -103,6 +103,9 @@ switch ($Mode) {
             New-Item -ItemType Directory -Path $tmpSkills | Out-Null
             foreach ($skill in $localSkills) {
                 $files = @(Get-ChildItem -LiteralPath $skill.FullName -Recurse -File -Force)
+                foreach ($dir in @(Get-ChildItem -LiteralPath $skill.FullName -Recurse -Directory -Force)) {
+                    if ($dir.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Link de diretorio nao permitido: $($dir.FullName)" }
+                }
                 foreach ($file in $files) { Check-SkillFile $file }
                 $target = Join-Path $tmpSkills $skill.Name
                 Copy-Item -LiteralPath $skill.FullName -Destination $target -Recurse
