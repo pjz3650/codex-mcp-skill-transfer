@@ -131,6 +131,13 @@ switch ($Mode) {
         Write-Host 'Use -Mode publish para verificar arquivos e publicar com confirmacao.' -ForegroundColor Cyan
         Write-Host '============================================================' -ForegroundColor Cyan
         Write-Host ''
+        Write-Host 'COMANDOS PARA SINCRONIZAR' -ForegroundColor Magenta
+        Write-Host '  SUBIR skills e MCPs para o GitHub:' -ForegroundColor Yellow
+        Write-Host '  powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\sync-codex.ps1" -Mode publish' -ForegroundColor White
+        Write-Host ''
+        Write-Host '  PUXAR e instalar do GitHub nesta maquina:' -ForegroundColor Yellow
+        Write-Host '  powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\sync-codex.ps1" -Mode install' -ForegroundColor White
+        Write-Host ''
     }
     publish {
         Ensure-Repo
