@@ -15,7 +15,7 @@ function Assert-Tools {
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) { throw 'Git nao encontrado. Instale Git for Windows e autentique com GitHub.' }
 }
 function Test-Private([string]$value) {
-    return ($value -match '(?i)(gh[pousr]_[A-Za-z0-9_]+|github_pat_|sk-[A-Za-z0-9_-]{15,}|AIza[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN .*PRIVATE KEY-----|mongodb(\+srv)?://|postgres(ql)?://|https?://[^/\s:@]+:[^/\s@]+@|(?i:password|secret|token|api[_-]?key|authorization)\s*[:=]\s*\S+)' )
+    return ($value -match '(?i)(gh[pousr]_[A-Za-z0-9_]+|github_pat_|sk-[A-Za-z0-9_-]{15,}|AIza[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN .*PRIVATE KEY-----|mongodb(\+srv)?://|postgres(ql)?://|https?://[^/\s:@]+:[^/\s@]+@|(?i:password|secret|token|api[_-]?key|authorization)\s*[:=]\s*[\x22\x27]?[A-Za-z0-9_\-]{24,})' )
 }
 function Test-SafeArg([string]$value) {
     return ($value -match '^[a-zA-Z0-9_./:@+=,-]+$' -and -not (Test-Private $value))
