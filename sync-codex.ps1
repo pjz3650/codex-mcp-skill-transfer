@@ -1,5 +1,8 @@
 param(
-    [ValidateSet('scan','publish','install')][string]$Mode = 'scan',
+    [ValidateSet('scan','publish','install','register')][string]$Mode = 'scan',
+    [string]$Skill,
+    [string]$Source,
+    [ValidateSet('agents','codex')][string]$Location = 'agents',
     [string]$Repository = 'https://github.com/pjz3650/codex-mcp-skill-transfer.git'
 )
 $ErrorActionPreference = 'Stop'
@@ -8,7 +11,8 @@ $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME '.c
 $skillsRoot = Join-Path $codexHome 'skills'
 $agentsSkillsRoot = Join-Path (Join-Path $HOME '.agents') 'skills'
 $payload = Join-Path $root 'package'
-$skillDst = Join-Path $payload 'skills'
+$skillsManifest = Join-Path $payload 'skills.json'
+$localSources = Join-Path $root 'skill-sources.local.json'
 $manifestFile = Join-Path $payload 'mcps.json'
 
 function Assert-Tools {
@@ -66,36 +70,6 @@ function Get-SkillSources {
     }
     return ,$items
 }
-function Check-SkillFile($file) {
-    if ($file.Length -gt 1MB) { throw "Arquivo acima de 1 MB: $($file.FullName)" }
-    if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Link nao permitido: $($file.FullName)" }
-
-    $ext = [IO.Path]::GetExtension($file.Name).ToLowerInvariant()
-    $allowed = @('.md','.txt','.json','.yaml','.yml','.toml','.py','.ps1','.js','.ts','.sh','.html','.css','.xml','.csv')
-    $knownNoExtension = @('LICENSE','LICENCE','COPYING','NOTICE','AUTHORS','CONTRIBUTORS')
-    $noExtensionScript = [string]::IsNullOrEmpty($ext) -and ($knownNoExtension -notcontains $file.Name.ToUpperInvariant())
-
-    # Verifique bytes antes de converter para texto; nao copie binarios arbitrarios.
-    $bytes = [IO.File]::ReadAllBytes($file.FullName)
-    if ($bytes -contains [byte]0) { throw "Arquivo binario ou NUL nao permitido: $($file.FullName)" }
-    $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
-    try {
-        $body = $strictUtf8.GetString($bytes)
-    } catch {
-        throw "Arquivo nao e texto UTF-8 valido: $($file.FullName)"
-    }
-    if ($noExtensionScript) {
-        # Scripts sem extensao sao aceitos SOMENTE com shebang de interpretador conhecido.
-        $firstLine = ($body -split '\r?\n', 2)[0]
-        $knownShebang = '^#!\s*(?:/usr/bin/env\s+(?:-S\s+)?|/(?:usr/)?bin/)(?:python(?:3(?:\.\d+)?)?|bash|sh|node|ruby|perl)(?:\s|$)'
-        if ($firstLine -notmatch $knownShebang) {
-            throw "Arquivo sem extensao nao reconhecido (sem shebang permitido): $($file.FullName)"
-        }
-    } elseif (($allowed -notcontains $ext) -and ($knownNoExtension -notcontains $file.Name.ToUpperInvariant())) {
-        throw "Arquivo nao permitido: $($file.FullName)"
-    }
-    if (Test-Private $body) { throw "Possivel credencial em $($file.FullName). Publicacao bloqueada; revise manualmente." }
-}
 function Ensure-Repo {
     Assert-Tools
     if (-not (Test-Path (Join-Path $root '.git'))) {
@@ -106,148 +80,117 @@ function Ensure-Repo {
         throw 'Remote origin diferente do repositorio autorizado.'
     }
 }
-switch ($Mode) {
-    scan {
-        $localSkills = @(Get-SkillSources)
-        $mcps = @(Read-Mcps)
-        $cfgPath = Join-Path $codexHome 'config.toml'
-        $configured = @()
-        if (Test-Path $cfgPath) {
-            $rawConfig = Get-Content -LiteralPath $cfgPath -Encoding UTF8
-            foreach ($line in $rawConfig) {
-                if ($line -match '^\s*\[mcp_servers\.([A-Za-z0-9_-]+)\]') {
-                    $configured += $Matches[1]
-                }
+function ValidSource($url) {
+    return ($url -match '^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?$')
+}
+function Read-Sources {
+    $map = @{}
+    foreach ($file in @($skillsManifest,$localSources)) {
+        if (-not (Test-Path $file)) { continue }
+        foreach ($entry in @(Get-Content $file -Raw | ConvertFrom-Json)) {
+            if ($entry.name -and $entry.location -and (ValidSource $entry.source)) {
+                $map["$($entry.location)/$($entry.name)"] = $entry
             }
         }
-        $safeNames = @($mcps | ForEach-Object { $_.name })
-        $omitted = @($configured | Sort-Object -Unique | Where-Object { $safeNames -notcontains $_ })
-        Write-Host ''
-        Write-Host '============================================================' -ForegroundColor Cyan
-        Write-Host '           INVENTARIO DE MCPs E SKILLS DO CODEX' -ForegroundColor Cyan
-        Write-Host '============================================================' -ForegroundColor Cyan
-        Write-Host "Computador: $env:COMPUTERNAME"
-        Write-Host "CODEX_HOME: $codexHome"
-        Write-Host ''
-        Write-Host "SKILLS ENCONTRADAS: $($localSkills.Count)" -ForegroundColor Green
-        foreach ($location in @('agents','codex')) {
-            $path = if ($location -eq 'agents') { $agentsSkillsRoot } else { $skillsRoot }
-            $items = @($localSkills | Where-Object { $_.Location -eq $location } | Sort-Object Name)
-            Write-Host "  [$location] $path - $($items.Count) skill(s)" -ForegroundColor Yellow
-            foreach ($item in $items) { Write-Host "    + $($item.Name)" }
-            if ($items.Count -eq 0) { Write-Host '    (nenhuma encontrada)' -ForegroundColor DarkGray }
+    }
+    return $map
+}
+function Print-Commands {
+    Write-Host 'SUBIR: powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\sync-codex.ps1" -Mode publish'
+    Write-Host 'PUXAR: powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\sync-codex.ps1" -Mode install'
+    Write-Host 'ORIGEM: .\sync-codex.ps1 -Mode register -Skill NOME -Source https://github.com/USUARIO/REPO'
+}
+switch ($Mode) {
+    register {
+        if ($Skill -notmatch '^[A-Za-z0-9_.-]+$' -or -not (ValidSource $Source)) { throw 'Informe -Skill NOME -Source https://github.com/USUARIO/REPO e opcionalmente -Location agents|codex.' }
+        if (-not @(Get-SkillSources | Where-Object { $_.Name -eq $Skill -and $_.Location -eq $Location }).Count) { throw 'Skill local nao encontrada.' }
+        $entries = @()
+        if (Test-Path $localSources) { $entries = @(Get-Content $localSources -Raw | ConvertFrom-Json | Where-Object { -not ($_.name -eq $Skill -and $_.location -eq $Location) }) }
+        $entries += [pscustomobject]@{name=$Skill;location=$Location;source=$Source}
+        ConvertTo-Json -InputObject @($entries) -Depth 5 | Set-Content $localSources -Encoding UTF8
+        Write-Host "Fonte registrada: $Location/$Skill -> $Source" -ForegroundColor Green
+    }
+    scan {
+        $sources=Read-Sources
+        Write-Host '======== SKILLS ========' -ForegroundColor Cyan
+        foreach ($skill in @(Get-SkillSources | Sort-Object Location,Name)) {
+            $key="$($skill.Location)/$($skill.Name)"
+            if ($sources.ContainsKey($key)) {
+                $item=$sources[$key]
+                Write-Host "[COMANDO] $key : npx --yes skills add $($item.source) --skill $($item.name) --global --yes" -ForegroundColor Green
+            } else {
+                Write-Host "[ORIGEM DESCONHECIDA] $key" -ForegroundColor Yellow
+            }
         }
-        Write-Host ''
-        Write-Host "MCPs CONFIGURADOS: $(@($configured | Sort-Object -Unique).Count)" -ForegroundColor Green
-        foreach ($mcp in @($mcps | Sort-Object name)) {
-            Write-Host "  [EXPORTAVEL] $($mcp.name)" -ForegroundColor Green
-            Write-Host "    Comando: $($mcp.command)"
-        }
-        foreach ($name in $omitted) {
-            Write-Host "  [NAO EXPORTADO] $name - exige revisao/manual" -ForegroundColor Yellow
-        }
-        if ($configured.Count -eq 0) { Write-Host '  (nenhum MCP encontrado no config.toml)' -ForegroundColor DarkGray }
-        Write-Host ''
-        Write-Host 'Resumo: MCPs nao exportaveis nao sao enviados; credenciais nunca sao exibidas.' -ForegroundColor Cyan
-        Write-Host 'Use -Mode publish para verificar arquivos e publicar com confirmacao.' -ForegroundColor Cyan
-        Write-Host '============================================================' -ForegroundColor Cyan
-        Write-Host ''
-        Write-Host 'COMANDOS PARA SINCRONIZAR' -ForegroundColor Magenta
-        Write-Host '  SUBIR skills e MCPs para o GitHub:' -ForegroundColor Yellow
-        Write-Host '  powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\sync-codex.ps1" -Mode publish' -ForegroundColor White
-        Write-Host ''
-        Write-Host '  PUXAR e instalar do GitHub nesta maquina:' -ForegroundColor Yellow
-        Write-Host '  powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\sync-codex.ps1" -Mode install' -ForegroundColor White
-        Write-Host ''
+        $mcps=@(Read-Mcps)
+        Write-Host "======== MCPs exportaveis: $($mcps.Count) ========" -ForegroundColor Cyan
+        foreach ($m in $mcps) { Write-Host "$($m.name): $($m.command)" }
+        Print-Commands
     }
     publish {
         Ensure-Repo
-        & git -C $root pull --rebase; if ($LASTEXITCODE -ne 0) { throw 'Git pull falhou. Resolva o conflito antes de publicar.' }
-        $localSkills=@(Get-SkillSources)
-        $mcps=@(Read-Mcps)
-        $tmp = Join-Path $root ('.stage-' + [guid]::NewGuid().ToString('N'))
-        New-Item -ItemType Directory -Path $tmp | Out-Null
-        try {
-            $tmpSkills = Join-Path $tmp 'skills'
-            New-Item -ItemType Directory -Path $tmpSkills | Out-Null
-            foreach ($skill in $localSkills) {
-                $files = @(Get-ChildItem -LiteralPath $skill.FullName -Recurse -File -Force)
-                foreach ($dir in @(Get-ChildItem -LiteralPath $skill.FullName -Recurse -Directory -Force)) {
-                    if ($dir.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Link de diretorio nao permitido: $($dir.FullName)" }
-                }
-                foreach ($file in $files) { Check-SkillFile $file }
-                $namespace = Join-Path $tmpSkills $skill.Location
-                New-Item -ItemType Directory -Path $namespace -Force | Out-Null
-                $target = Join-Path $namespace $skill.Name
-                Copy-Item -LiteralPath $skill.FullName -Destination $target -Recurse
+        & git -C $root pull --rebase
+        if ($LASTEXITCODE -ne 0) { throw 'git pull falhou.' }
+        $sources=Read-Sources
+        $export=@{}
+        if (Test-Path $skillsManifest) {
+            foreach ($item in @(Get-Content $skillsManifest -Raw | ConvertFrom-Json)) {
+                if ($item.name -and $item.location -and (ValidSource $item.source)) { $export["$($item.location)/$($item.name)"]=$item }
             }
-            $mcps | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $tmp 'mcps.json') -Encoding UTF8
-            New-Item -ItemType Directory -Path $payload -Force | Out-Null
-            New-Item -ItemType Directory -Path $skillDst -Force | Out-Null
-            # Preserva skills compartilhadas por outros PCs; atualiza apenas nomes locais.
-            foreach ($skill in $localSkills) {
-                $namespace = Join-Path $skillDst $skill.Location
-                New-Item -ItemType Directory -Path $namespace -Force | Out-Null
-                $target = Join-Path $namespace $skill.Name
-                if (Test-Path $target) { Remove-Item -LiteralPath $target -Recurse -Force }
-                Copy-Item -LiteralPath (Join-Path (Join-Path $tmpSkills $skill.Location) $skill.Name) -Destination $target -Recurse
-            }
-            $allMcps=@{}
-            if (Test-Path $manifestFile) {
-                foreach ($m in @(Get-Content $manifestFile -Raw | ConvertFrom-Json)) { if ($m.name) { $allMcps[$m.name]=$m } }
-            }
-            foreach ($m in $mcps) { $allMcps[$m.name]=$m }
-            @($allMcps.Values | Sort-Object name) | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $manifestFile -Encoding UTF8
-            & git -C $root add -- package/skills package/mcps.json
-            & git -C $root diff --cached --quiet
-            if ($LASTEXITCODE -eq 0) { Write-Host 'Sem alteracoes para publicar.'; break }
-            Write-Host 'Revisao do diff antes do envio:'
-            & git -C $root diff --cached --stat
-            $answer=Read-Host 'Conferiu que nao ha dados pessoais/sensiveis? Digite PUBLICAR para enviar'
-            if ($answer -cne 'PUBLICAR') { & git -C $root reset -- package/skills package/mcps.json | Out-Null; throw 'Publicacao cancelada.' }
-            & git -C $root commit -m "sync: atualizar skills e MCPs seguros"
-            if ($LASTEXITCODE -ne 0) { throw 'Commit falhou.' }
-            & git -C $root push
-            if ($LASTEXITCODE -ne 0) { throw 'Push falhou; commit ficou apenas local.' }
-            Write-Host 'Publicado no GitHub.'
-        } finally { if (Test-Path $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force } }
+        }
+        foreach ($skill in @(Get-SkillSources)) {
+            $key="$($skill.Location)/$($skill.Name)"
+            if ($sources.ContainsKey($key)) { $export[$key]=$sources[$key] }
+            else { Write-Host "Sem origem (nao exportada): $key" -ForegroundColor Yellow }
+        }
+        New-Item -ItemType Directory -Path $payload -Force | Out-Null
+        ConvertTo-Json -InputObject @($export.Values | Sort-Object location,name) -Depth 5 | Set-Content $skillsManifest -Encoding UTF8
+        $allMcps=@{}
+        if (Test-Path $manifestFile) { foreach ($m in @(Get-Content $manifestFile -Raw | ConvertFrom-Json)) { if ($m.name) { $allMcps[$m.name]=$m } } }
+        foreach ($m in @(Read-Mcps)) { $allMcps[$m.name]=$m }
+        ConvertTo-Json -InputObject @($allMcps.Values | Sort-Object name) -Depth 10 | Set-Content $manifestFile -Encoding UTF8
+        & git -C $root rm -r --ignore-unmatch -- package/skills
+        & git -C $root add -- package/skills.json package/mcps.json
+        & git -C $root diff --cached --stat
+        & git -C $root diff --cached --quiet
+        if ($LASTEXITCODE -eq 0) { Write-Host 'Sem mudancas.'; break }
+        if ((Read-Host 'Revise as fontes e MCPs. Digite PUBLICAR para fazer push') -cne 'PUBLICAR') {
+            & git -C $root reset HEAD -- package/skills package/skills.json package/mcps.json | Out-Null
+            throw 'Cancelado.'
+        }
+        & git -C $root commit -m 'sync: manifestos de instalacao sem arquivos de skills'
+        if ($LASTEXITCODE -ne 0) { throw 'Commit falhou.' }
+        & git -C $root push
+        if ($LASTEXITCODE -ne 0) { throw 'Push falhou.' }
+        Write-Host 'Publicado: apenas manifestos, nenhuma pasta de skills.' -ForegroundColor Green
     }
     install {
         Ensure-Repo
         & git -C $root pull --ff-only
-        if ($LASTEXITCODE -ne 0) { throw 'Git pull falhou.' }
-        if (Test-Path $skillDst) {
-            foreach ($location in @('codex','agents')) {
-                $sourceRoot = Join-Path $skillDst $location
-                if (-not (Test-Path $sourceRoot)) { continue }
-                $destinationRoot = if ($location -eq 'agents') { $agentsSkillsRoot } else { $skillsRoot }
-                New-Item -ItemType Directory -Path $destinationRoot -Force | Out-Null
-                foreach ($skill in @(Get-ChildItem -LiteralPath $sourceRoot -Directory)) {
-                    $dest=Join-Path $destinationRoot $skill.Name
-                    if (Test-Path $dest) {
-                        Write-Warning "Skill ja existe; ignorando para nao sobrescrever: $($location)/$($skill.Name)"
-                        continue
-                    }
-                    Copy-Item -LiteralPath $skill.FullName -Destination $dest -Recurse
-                    Write-Host "Skill instalada: $($location)/$($skill.Name)"
-                }
+        if ($LASTEXITCODE -ne 0) { throw 'git pull falhou.' }
+        if (Test-Path $skillsManifest) {
+            foreach ($item in @(Get-Content $skillsManifest -Raw | ConvertFrom-Json)) {
+                if (-not $item.name -or $item.name -notmatch '^[A-Za-z0-9_.-]+$' -or -not (ValidSource $item.source)) { continue }
+                if (@(Get-SkillSources | Where-Object { $_.Name -eq $item.name }).Count) { Write-Host "Ja existe: $($item.name)"; continue }
+                Write-Host "Instalar: npx --yes skills add $($item.source) --skill $($item.name) --global --yes"
+                if ((Read-Host 'Executar instalacao de codigo externo? Digite SIM') -cne 'SIM') { continue }
+                if (-not (Get-Command npx -ErrorAction SilentlyContinue)) { Write-Warning 'npx ausente: instale Node.js/npm.'; continue }
+                & npx --yes skills add $item.source --skill $item.name --global --yes
+                if ($LASTEXITCODE -ne 0) { Write-Warning "Falha: $($item.name)" }
             }
         }
         if (Test-Path $manifestFile) {
-            $mcps=@(Get-Content -LiteralPath $manifestFile -Raw | ConvertFrom-Json)
             $installed=@(Read-Mcps | ForEach-Object { $_.name })
-            $codex=Get-Command codex -ErrorAction SilentlyContinue
-            foreach ($m in $mcps) {
+            foreach ($m in @(Get-Content $manifestFile -Raw | ConvertFrom-Json)) {
                 if (-not $m.name -or $m.name -notmatch '^[A-Za-z0-9_-]+$' -or -not (Test-SafeArg $m.command)) { continue }
-                if ($installed -contains $m.name) { Write-Host "MCP existente, mantido: $($m.name)"; continue }
+                if ($installed -contains $m.name) { continue }
                 if (@($m.args | Where-Object { -not (Test-SafeArg $_) }).Count) { continue }
-                if (-not $codex) { Write-Warning "Codex CLI indisponivel; MCP pendente: $($m.name)"; continue }
-                Write-Host "MCP disponivel: $($m.name) - $($m.command) $($m.args -join ' ')"
+                Write-Host "MCP: $($m.name) ($($m.command))"
                 if ((Read-Host 'Registrar este MCP? Digite SIM') -cne 'SIM') { continue }
                 & codex mcp add $m.name -- $m.command @($m.args)
-                if ($LASTEXITCODE -ne 0) { Write-Warning "Falha ao registrar MCP: $($m.name)" }
+                if ($LASTEXITCODE -ne 0) { Write-Warning "Falha MCP: $($m.name)" }
             }
         }
-        Write-Host 'Concluido. Dependencias e logins dos MCPs devem ser configurados localmente.'
+        Write-Host 'Concluido. Dependencias e credenciais de MCPs sao locais.'
     }
 }
