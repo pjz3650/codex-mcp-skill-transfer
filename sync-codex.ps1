@@ -67,15 +67,33 @@ function Get-SkillSources {
     return ,$items
 }
 function Check-SkillFile($file) {
+    if ($file.Length -gt 1MB) { throw "Arquivo acima de 1 MB: $($file.FullName)" }
+    if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Link nao permitido: $($file.FullName)" }
+
     $ext = [IO.Path]::GetExtension($file.Name).ToLowerInvariant()
     $allowed = @('.md','.txt','.json','.yaml','.yml','.toml','.py','.ps1','.js','.ts','.sh','.html','.css','.xml','.csv')
     $knownNoExtension = @('LICENSE','LICENCE','COPYING','NOTICE','AUTHORS','CONTRIBUTORS')
-    if (($allowed -notcontains $ext) -and ($knownNoExtension -notcontains $file.Name.ToUpperInvariant())) {
+    $noExtensionScript = [string]::IsNullOrEmpty($ext) -and ($knownNoExtension -notcontains $file.Name.ToUpperInvariant())
+
+    # Verifique bytes antes de converter para texto; nao copie binarios arbitrarios.
+    $bytes = [IO.File]::ReadAllBytes($file.FullName)
+    if ($bytes -contains [byte]0) { throw "Arquivo binario ou NUL nao permitido: $($file.FullName)" }
+    $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+    try {
+        $body = $strictUtf8.GetString($bytes)
+    } catch {
+        throw "Arquivo nao e texto UTF-8 valido: $($file.FullName)"
+    }
+    if ($noExtensionScript) {
+        # Scripts sem extensao sao aceitos SOMENTE com shebang de interpretador conhecido.
+        $firstLine = ($body -split '\r?\n', 2)[0]
+        $knownShebang = '^#!\s*(?:/usr/bin/env\s+(?:-S\s+)?|/(?:usr/)?bin/)(?:python(?:3(?:\.\d+)?)?|bash|sh|node|ruby|perl)(?:\s|$)'
+        if ($firstLine -notmatch $knownShebang) {
+            throw "Arquivo sem extensao nao reconhecido (sem shebang permitido): $($file.FullName)"
+        }
+    } elseif (($allowed -notcontains $ext) -and ($knownNoExtension -notcontains $file.Name.ToUpperInvariant())) {
         throw "Arquivo nao permitido: $($file.FullName)"
     }
-    if ($file.Length -gt 1MB) { throw "Arquivo acima de 1 MB: $($file.FullName)" }
-    if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Link nao permitido: $($file.FullName)" }
-    $body = [IO.File]::ReadAllText($file.FullName)
     if (Test-Private $body) { throw "Possivel credencial em $($file.FullName). Publicacao bloqueada; revise manualmente." }
 }
 function Ensure-Repo {
