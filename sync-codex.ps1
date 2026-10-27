@@ -6,6 +6,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME '.codex' }
 $skillsRoot = Join-Path $codexHome 'skills'
+$agentsSkillsRoot = Join-Path (Join-Path $HOME '.agents') 'skills'
 $payload = Join-Path $root 'package'
 $skillDst = Join-Path $payload 'skills'
 $manifestFile = Join-Path $payload 'mcps.json'
@@ -56,10 +57,14 @@ function Read-Mcps {
     return ,$entries
 }
 function Get-SkillSources {
-    if (-not (Test-Path $skillsRoot)) { return @() }
-    return @(Get-ChildItem -LiteralPath $skillsRoot -Directory -Force | Where-Object {
-        $_.Name -ne '.system' -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint)
-    })
+    $items = @()
+    foreach ($source in @(@{Path=$skillsRoot; Location='codex'}, @{Path=$agentsSkillsRoot; Location='agents'})) {
+        if (-not (Test-Path $source.Path)) { continue }
+        foreach ($dir in @(Get-ChildItem -LiteralPath $source.Path -Directory -Force | Where-Object { $_.Name -ne '.system' -and -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) })) {
+            $items += [pscustomobject]@{Name=$dir.Name; FullName=$dir.FullName; Location=$source.Location}
+        }
+    }
+    return ,$items
 }
 function Check-SkillFile($file) {
     $ext = [IO.Path]::GetExtension($file.Name).ToLowerInvariant()
@@ -86,7 +91,7 @@ switch ($Mode) {
         $mcps = @(Read-Mcps)
         Write-Host "CODEX_HOME: $codexHome"
         Write-Host "Skills exportaveis (diretorios): $($localSkills.Count)"
-        $localSkills | ForEach-Object { Write-Host "  skill: $($_.Name)" }
+        $localSkills | ForEach-Object { Write-Host "  skill [$($_.Location)]: $($_.Name)" }
         Write-Host "MCPs de comando sem parametros sensiveis: $($mcps.Count)"
         $mcps | ForEach-Object { Write-Host "  mcp: $($_.name)" }
         Write-Host 'MCPs HTTP/SSE e configs complexas nao sao exportados automaticamente.'
@@ -107,7 +112,9 @@ switch ($Mode) {
                     if ($dir.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Link de diretorio nao permitido: $($dir.FullName)" }
                 }
                 foreach ($file in $files) { Check-SkillFile $file }
-                $target = Join-Path $tmpSkills $skill.Name
+                $namespace = Join-Path $tmpSkills $skill.Location
+                New-Item -ItemType Directory -Path $namespace -Force | Out-Null
+                $target = Join-Path $namespace $skill.Name
                 Copy-Item -LiteralPath $skill.FullName -Destination $target -Recurse
             }
             $mcps | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $tmp 'mcps.json') -Encoding UTF8
@@ -115,9 +122,11 @@ switch ($Mode) {
             New-Item -ItemType Directory -Path $skillDst -Force | Out-Null
             # Preserva skills compartilhadas por outros PCs; atualiza apenas nomes locais.
             foreach ($skill in $localSkills) {
-                $target = Join-Path $skillDst $skill.Name
+                $namespace = Join-Path $skillDst $skill.Location
+                New-Item -ItemType Directory -Path $namespace -Force | Out-Null
+                $target = Join-Path $namespace $skill.Name
                 if (Test-Path $target) { Remove-Item -LiteralPath $target -Recurse -Force }
-                Copy-Item -LiteralPath (Join-Path $tmpSkills $skill.Name) -Destination $target -Recurse
+                Copy-Item -LiteralPath (Join-Path (Join-Path $tmpSkills $skill.Location) $skill.Name) -Destination $target -Recurse
             }
             $allMcps=@{}
             if (Test-Path $manifestFile) {
@@ -144,15 +153,20 @@ switch ($Mode) {
         & git -C $root pull --ff-only
         if ($LASTEXITCODE -ne 0) { throw 'Git pull falhou.' }
         if (Test-Path $skillDst) {
-            New-Item -ItemType Directory -Path $skillsRoot -Force | Out-Null
-            foreach ($skill in @(Get-ChildItem $skillDst -Directory)) {
-                $dest=Join-Path $skillsRoot $skill.Name
-                if (Test-Path $dest) {
-                    Write-Warning "Skill ja existe; ignorando para nao sobrescrever: $($skill.Name)"
-                    continue
+            foreach ($location in @('codex','agents')) {
+                $sourceRoot = Join-Path $skillDst $location
+                if (-not (Test-Path $sourceRoot)) { continue }
+                $destinationRoot = if ($location -eq 'agents') { $agentsSkillsRoot } else { $skillsRoot }
+                New-Item -ItemType Directory -Path $destinationRoot -Force | Out-Null
+                foreach ($skill in @(Get-ChildItem -LiteralPath $sourceRoot -Directory)) {
+                    $dest=Join-Path $destinationRoot $skill.Name
+                    if (Test-Path $dest) {
+                        Write-Warning "Skill ja existe; ignorando para nao sobrescrever: $($location)/$($skill.Name)"
+                        continue
+                    }
+                    Copy-Item -LiteralPath $skill.FullName -Destination $dest -Recurse
+                    Write-Host "Skill instalada: $($location)/$($skill.Name)"
                 }
-                Copy-Item -LiteralPath $skill.FullName -Destination $dest -Recurse
-                Write-Host "Skill instalada: $($skill.Name)"
             }
         }
         if (Test-Path $manifestFile) {
