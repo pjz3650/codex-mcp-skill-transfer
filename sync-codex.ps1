@@ -89,12 +89,48 @@ switch ($Mode) {
     scan {
         $localSkills = @(Get-SkillSources)
         $mcps = @(Read-Mcps)
+        $cfgPath = Join-Path $codexHome 'config.toml'
+        $configured = @()
+        if (Test-Path $cfgPath) {
+            $rawConfig = Get-Content -LiteralPath $cfgPath -Encoding UTF8
+            foreach ($line in $rawConfig) {
+                if ($line -match '^\s*\[mcp_servers\.([A-Za-z0-9_-]+)\]') {
+                    $configured += $Matches[1]
+                }
+            }
+        }
+        $safeNames = @($mcps | ForEach-Object { $_.name })
+        $omitted = @($configured | Sort-Object -Unique | Where-Object { $safeNames -notcontains $_ })
+        Write-Host ''
+        Write-Host '============================================================' -ForegroundColor Cyan
+        Write-Host '           INVENTARIO DE MCPs E SKILLS DO CODEX' -ForegroundColor Cyan
+        Write-Host '============================================================' -ForegroundColor Cyan
+        Write-Host "Computador: $env:COMPUTERNAME"
         Write-Host "CODEX_HOME: $codexHome"
-        Write-Host "Skills exportaveis (diretorios): $($localSkills.Count)"
-        $localSkills | ForEach-Object { Write-Host "  skill [$($_.Location)]: $($_.Name)" }
-        Write-Host "MCPs de comando sem parametros sensiveis: $($mcps.Count)"
-        $mcps | ForEach-Object { Write-Host "  mcp: $($_.name)" }
-        Write-Host 'MCPs HTTP/SSE e configs complexas nao sao exportados automaticamente.'
+        Write-Host ''
+        Write-Host "SKILLS ENCONTRADAS: $($localSkills.Count)" -ForegroundColor Green
+        foreach ($location in @('agents','codex')) {
+            $path = if ($location -eq 'agents') { $agentsSkillsRoot } else { $skillsRoot }
+            $items = @($localSkills | Where-Object { $_.Location -eq $location } | Sort-Object Name)
+            Write-Host "  [$location] $path - $($items.Count) skill(s)" -ForegroundColor Yellow
+            foreach ($item in $items) { Write-Host "    + $($item.Name)" }
+            if ($items.Count -eq 0) { Write-Host '    (nenhuma encontrada)' -ForegroundColor DarkGray }
+        }
+        Write-Host ''
+        Write-Host "MCPs CONFIGURADOS: $(@($configured | Sort-Object -Unique).Count)" -ForegroundColor Green
+        foreach ($mcp in @($mcps | Sort-Object name)) {
+            Write-Host "  [EXPORTAVEL] $($mcp.name)" -ForegroundColor Green
+            Write-Host "    Comando: $($mcp.command)"
+        }
+        foreach ($name in $omitted) {
+            Write-Host "  [NAO EXPORTADO] $name - exige revisao/manual" -ForegroundColor Yellow
+        }
+        if ($configured.Count -eq 0) { Write-Host '  (nenhum MCP encontrado no config.toml)' -ForegroundColor DarkGray }
+        Write-Host ''
+        Write-Host 'Resumo: MCPs nao exportaveis nao sao enviados; credenciais nunca sao exibidas.' -ForegroundColor Cyan
+        Write-Host 'Use -Mode publish para verificar arquivos e publicar com confirmacao.' -ForegroundColor Cyan
+        Write-Host '============================================================' -ForegroundColor Cyan
+        Write-Host ''
     }
     publish {
         Ensure-Repo
