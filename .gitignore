@@ -1,0 +1,12 @@
+# Nunca versionar segredos nem dados locais do Codex
+.env
+.env.*
+*.pem
+*.key
+*token*
+*secret*
+auth.json
+config.toml
+.stage-*/
+*.zip
+*.log
