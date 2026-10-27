@@ -69,7 +69,10 @@ function Get-SkillSources {
 function Check-SkillFile($file) {
     $ext = [IO.Path]::GetExtension($file.Name).ToLowerInvariant()
     $allowed = @('.md','.txt','.json','.yaml','.yml','.toml','.py','.ps1','.js','.ts','.sh','.html','.css','.xml','.csv')
-    if ($allowed -notcontains $ext) { throw "Arquivo nao permitido: $($file.FullName)" }
+    $knownNoExtension = @('LICENSE','LICENCE','COPYING','NOTICE','AUTHORS','CONTRIBUTORS')
+    if (($allowed -notcontains $ext) -and ($knownNoExtension -notcontains $file.Name.ToUpperInvariant())) {
+        throw "Arquivo nao permitido: $($file.FullName)"
+    }
     if ($file.Length -gt 1MB) { throw "Arquivo acima de 1 MB: $($file.FullName)" }
     if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Link nao permitido: $($file.FullName)" }
     $body = [IO.File]::ReadAllText($file.FullName)
