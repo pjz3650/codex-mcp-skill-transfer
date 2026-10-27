@@ -1,50 +1,46 @@
 # Codex MCP & Skill Transfer
 
-Sincronização **manual e revisada** de skills e configurações de MCP entre PCs Windows por repositório Git privado.
+Sincroniza **referências de instalação** de skills e definições seguras de MCP. **Não publica nenhum arquivo das skills**.
 
-## Requisitos
+## Uso (PowerShell no diretório do clone)
 
-- Git for Windows autenticado no GitHub, com acesso a este repositório privado
-- Codex instalado (o CLI \`codex\` é necessário para registrar MCPs)
-- PowerShell 5.1 ou mais recente
+```powershell
+git pull
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\sync-codex.ps1" -Mode scan
+```
 
-## Primeira instalação em cada computador
+Skills podem conter qualquer tipo de arquivo, e a instalação original não fica necessariamente registrada. Assim, quando a origem não for conhecida, o scan mostra **ORIGEM DESCONHECIDA**, e você cadastra a URL real do repositório que disponibiliza a skill:
 
-\`\`\`powershell
-git clone https://github.com/pjz3650/codex-mcp-skill-transfer.git
-cd codex-mcp-skill-transfer
-powershell -NoProfile -ExecutionPolicy Bypass -File .\sync-codex.ps1 -Mode scan
-\`\`\`
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\sync-codex.ps1" -Mode register -Skill impeccable -Location agents -Source https://github.com/USUARIO/REPO
+```
 
-Depois, **no PC de origem**:
+Substitua a URL por uma **origem verificada**. Não presuma que o nome da skill equivale ao nome do repositório. O arquivo `skill-sources.local.json` fica apenas no PC.
 
-\`\`\`powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\sync-codex.ps1 -Mode publish
-\`\`\`
+Para publicar as referências e MCPs seguros (com confirmação):
 
-E **no PC de destino**:
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\sync-codex.ps1" -Mode publish
+```
 
-\`\`\`powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\sync-codex.ps1 -Mode install
-\`\`\`
+No outro computador, para puxar e instalar (com confirmação individual):
 
-## Estrutura
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\sync-codex.ps1" -Mode install
+```
 
-- \`sync-codex.ps1\`: inventário, publicação e instalação.
-- \`package/skills/\`: skills compartilhadas (apenas arquivos texto permitidos).
-- \`package/mcps.json\`: nomes, comandos e argumentos **não sensíveis** de MCPs locais.
+## Arquivos publicados
 
-## Segurança e limitações
+- `package/skills.json`: nome da skill, origem GitHub e localização original
+- `package/mcps.json`: somente MCPs de comando com argumentos que passaram pelo filtro
 
-- **O script NÃO envia** \`config.toml\`, \`auth.json\`, arquivos \`.env\`, tokens, senhas nem variáveis \`env\` dos MCPs.
-- Skills com arquivos de extensão não permitida, links simbólicos, tamanho excessivo ou padrões evidentes de credenciais **bloqueiam a publicação**.
-- **Não é garantia absoluta de ausência de segredos.** Antes do push, revise as skills e o diff; só publique ao digitar \`PUBLICAR\`.
-- MCPs HTTP/SSE, configurações complexas e credenciais não são exportados automaticamente. URLs sensíveis e argumentos suspeitos são omitidos.
-- Instalar MCP apenas registra seu comando, com confirmação individual: dependências (ex.: \`npx\`, \`uvx\`) e autenticação devem existir no destino.
-- Skills existentes no destino não são sobrescritas. O publish preserva skills de outros PCs que já estejam no repositório.
-- Não apaga skills ou MCPs removidos da máquina de origem.
-- O repositório é **privado**; não o torne público sem auditoria.
-- O script não agenda tarefas nem executa sincronização em segundo plano. Rode publish após instalar algo e install no outro PC.
-- Execute apenas scripts e skills de origem confiável, pois podem conter código executável.
+## Limitações e segurança
 
-> Teste inicial sugerido: crie uma skill sem dados sensíveis, publique, instale no segundo computador e confira o resultado.
+- Não compartilha pastas `~/.agents/skills` ou `~/.codex/skills`, somente fontes para reinstalação.
+- Skills locais, privadas ou sem origem cadastrada ficam pendentes; não são copiadas nem instaladas automaticamente.
+- Usa `npx --yes skills add URL --skill NOME --global --yes`; a localização da instalação fica a cargo da CLI `skills`, não necessariamente preserva `agents/codex`.
+- A instalação de skills executa código de terceiros: confirme somente URLs confiáveis.
+- O filtro de MCPs é conservador, mas não garante detectar toda informação sensível. Revise o diff antes de publicar.
+- Os MCPs podem exigir login, ambiente, dependências e parâmetros locais.
+- A execução não é automática em segundo plano.
+- Se já tiverem sido publicados arquivos de skills antes desta versão, a remoção do índice atual **não os apaga do histórico Git**. Examine o histórico e remova segredos que tenham vazado, inclusive revogando credenciais comprometidas.
