@@ -95,6 +95,43 @@ function Read-Sources {
     }
     return $map
 }
+function Find-SkillOrigin($skill) {
+    # Somente fontes explicitas e verificaveis. Links soltos em tutoriais nao sao proveniencia.
+    $gitDir = Join-Path $skill.FullName '.git'
+    if (Test-Path $gitDir) {
+        $remote = (& git -C $skill.FullName remote get-url origin 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $remote -match '^https://github\.com/[^/\s]+/[^/\s]+(?:\.git)?$') {
+            $url = $remote.Trim() -replace '\.git$',''
+            if (ValidSource $url) { return $url }
+        }
+    }
+    # Frontmatter do SKILL.md: somente chaves canonicas explicitas de origem.
+    $doc = Join-Path $skill.FullName 'SKILL.md'
+    if (Test-Path $doc) {
+        $lines = @(Get-Content -LiteralPath $doc -TotalCount 100 -Encoding UTF8)
+        if ($lines.Count -gt 1 -and $lines[0].Trim() -eq '---') {
+            foreach ($line in $lines[1..($lines.Count-1)]) {
+                if ($line.Trim() -eq '---') { break }
+                if ($line -match '^\s*(?:source_repository|source_repo|repository_url)\s*:\s*["'']?(https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?)["'']?\s*$') {
+                    $url = $Matches[1] -replace '\.git$',''
+                    if (ValidSource $url) { return $url }
+                }
+            }
+        }
+    }
+    return $null
+}
+function Resolve-Sources($skills) {
+    $sources = Read-Sources
+    foreach ($skill in $skills) {
+        $key="$($skill.Location)/$($skill.Name)"
+        if (-not $sources.ContainsKey($key)) {
+            $url=Find-SkillOrigin $skill
+            if ($url) { $sources[$key]=[pscustomobject]@{name=$skill.Name;location=$skill.Location;source=$url} }
+        }
+    }
+    return $sources
+}
 function Print-Commands {
     Write-Host 'SUBIR: powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\sync-codex.ps1" -Mode publish'
     Write-Host 'PUXAR: powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\sync-codex.ps1" -Mode install'
@@ -111,7 +148,7 @@ switch ($Mode) {
         Write-Host "Fonte registrada: $Location/$Skill -> $Source" -ForegroundColor Green
     }
     scan {
-        $sources=Read-Sources
+        $sources=Resolve-Sources @(Get-SkillSources)
         Write-Host '======== SKILLS ========' -ForegroundColor Cyan
         foreach ($skill in @(Get-SkillSources | Sort-Object Location,Name)) {
             $key="$($skill.Location)/$($skill.Name)"
@@ -131,7 +168,7 @@ switch ($Mode) {
         Ensure-Repo
         & git -C $root pull --rebase
         if ($LASTEXITCODE -ne 0) { throw 'git pull falhou.' }
-        $sources=Read-Sources
+        $sources=Resolve-Sources @(Get-SkillSources)
         $export=@{}
         if (Test-Path $skillsManifest) {
             foreach ($item in @(Get-Content $skillsManifest -Raw | ConvertFrom-Json)) {
