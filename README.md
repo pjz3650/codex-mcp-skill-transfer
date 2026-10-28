@@ -9,7 +9,7 @@ git pull
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\sync-codex.ps1" -Mode scan
 ```
 
-Skills podem conter qualquer tipo de arquivo, e a instalação original não fica necessariamente registrada. Assim, quando a origem não for conhecida, o scan mostra **ORIGEM DESCONHECIDA**, e você cadastra a URL real do repositório que disponibiliza a skill:
+O script agora tenta descobrir automaticamente a origem por duas evidências: o remote `origin` de um repositório Git dentro da pasta da skill, ou os campos explícitos `source_repository`, `source_repo` e `repository_url` no frontmatter de `SKILL.md`. Não trata links aleatórios da documentação como origem. Quando não encontra evidência, o scan mostra **ORIGEM DESCONHECIDA**, e você pode cadastrar a URL real da skill:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\sync-codex.ps1" -Mode register -Skill impeccable -Location agents -Source https://github.com/USUARIO/REPO
@@ -37,7 +37,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\sync-codex.ps1" -Mode
 ## Limitações e segurança
 
 - Não compartilha pastas `~/.agents/skills` ou `~/.codex/skills`, somente fontes para reinstalação.
-- Skills locais, privadas ou sem origem cadastrada ficam pendentes; não são copiadas nem instaladas automaticamente.
+- Skills sem origem confiável ficam pendentes; não são copiadas nem instaladas automaticamente. A maioria das skills instaladas via gerenciador pode não reter dados de origem no diretório, então nem todas serão detectáveis.
+- A descoberta automática não verifica que o repositório contém a skill nomeada; confira o comando antes de instalar.
+- Nenhuma pasta local de skill é publicada, inclusive quando a origem foi detectada automaticamente.
 - Usa `npx --yes skills add URL --skill NOME --global --yes`; a localização da instalação fica a cargo da CLI `skills`, não necessariamente preserva `agents/codex`.
 - A instalação de skills executa código de terceiros: confirme somente URLs confiáveis.
 - O filtro de MCPs é conservador, mas não garante detectar toda informação sensível. Revise o diff antes de publicar.
