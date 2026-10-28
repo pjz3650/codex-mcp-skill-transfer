@@ -81,7 +81,9 @@ function Ensure-Repo {
     }
 }
 function ValidSource($url) {
-    return ($url -match '^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?
+    if (-not $url -or $url -notmatch '^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?$') { return $false }
+    if ($url -match '(?i)^https://github\.com/pjz3650/codex-mcp-skill-transfer(?:\.git)?$') { return $false }
+    return $true
 }
 function Read-Sources {
     $map = @{}
